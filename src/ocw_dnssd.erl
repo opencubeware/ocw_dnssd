@@ -1,10 +1,10 @@
 -module(ocw_dnssd).
 
 %% API
--export([start_link/0]).
+-export([start_link/1]).
 
 %% Special process callbacks
--export([init/1,
+-export([init/2,
          system_continue/3,
          system_terminate/4]).
 
@@ -13,21 +13,22 @@
 -define(INITIAL_BACKOFF, 1000).
 -define(MAX_BACKOFF, 60*1000).
 
--record(state, {ref, backoff}).
+-record(state, {ref, backoff, service_name}).
 %% ===================================================================
 %% API
 %% ===================================================================
-start_link() ->
-    proc_lib:start_link(?MODULE, init, [self()]).
+start_link(ServiceName) ->
+    proc_lib:start_link(?MODULE, init, [self(), ServiceName]).
 
 %% ===================================================================
 %% Special process logic
 %% ===================================================================
-init(Parent) ->
+init(Parent, ServiceName) ->
     register(?MODULE, self()),
     Debug = sys:debug_options([]),
     proc_lib:init_ack(Parent, {ok, self()}),
-    InitialState = maybe_register_service(#state{backoff=?INITIAL_BACKOFF}),
+    InitialState = maybe_register_service(#state{backoff=?INITIAL_BACKOFF,
+                                                 service_name=ServiceName}),
     loop(InitialState, Parent, Debug).
 
 loop(#state{ref=Ref}=State, Parent, Debug) ->
@@ -53,8 +54,9 @@ system_terminate(Reason, _Parent, _Debug, _State) ->
 %% ===================================================================
 %% Private functions
 %% ===================================================================
-maybe_register_service(#state{backoff=Backoff}=State) ->
-    case register_service() of
+maybe_register_service(#state{backoff=Backoff,
+                              service_name=ServiceName}=State) ->
+    case register_service(ServiceName) of
         {ok, Ref} ->
             State#state{ref=Ref, backoff=?INITIAL_BACKOFF};
         _ ->
@@ -69,10 +71,10 @@ maybe_register_service(#state{backoff=Backoff}=State) ->
     end.
 
             
-register_service() ->
+register_service(ServiceName) ->
     {ok, Hostname} = inet:gethostname(),
-    NodeName = "chat@" ++ Hostname ++ ".local.",
-    case dnssd:register(NodeName, "_chat._tcp", 4369) of
+    NodeName = ServiceName ++ "@" ++ Hostname ++ ".local.",
+    case dnssd:register(NodeName, "_" ++ ServiceName ++ "._tcp", 4369) of
         {ok, Ref} ->
             receive
                 {dnssd, Ref, {register, _, {RegisteredName, _, _}}} ->
