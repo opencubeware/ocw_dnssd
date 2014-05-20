@@ -1,0 +1,11 @@
+{application, ocw_dnssd,
+ [
+  {description, "A common library for mDNS actions"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {env, []}
+ ]}.
