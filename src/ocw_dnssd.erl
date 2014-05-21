@@ -2,10 +2,12 @@
 
 %% API
 -export([start_link/1,
-         start_link/3]).
+         start_link/2,
+         start_link/3,
+         start_link/4]).
 
 %% Special process callbacks
--export([init/4,
+-export([init/5,
          system_continue/3,
          system_terminate/4]).
 
@@ -16,32 +18,42 @@
 
 -define(PORT, 4369).
 
+-define(IDENTITY, fun(X) -> X end).
+
 -record(state, {register_ref,
                 browse_ref,
                 browse_nodes,
                 backoff,
                 node_type,
+                register_fun,
                 result_fun}).
 %% ===================================================================
 %% API
 %% ===================================================================
 start_link(NodeType) ->
-    start_link(NodeType, [], fun(X) -> X end).
+    start_link(NodeType, [], ?IDENTITY).
+
+start_link(NodeType, RegisterFun) ->
+    start_link(NodeType, RegisterFun, [], ?IDENTITY).
 
 start_link(NodeType, BrowseNodes, ResultFun) ->
+    start_link(NodeType, ?IDENTITY, BrowseNodes, ResultFun).
+
+start_link(NodeType, RegisterFun, BrowseNodes, ResultFun) ->
     proc_lib:start_link(?MODULE, init,
-                        [self(), NodeType, BrowseNodes, ResultFun]).
+                        [self(),NodeType,RegisterFun,BrowseNodes,ResultFun]).
 
 %% ===================================================================
 %% Special process logic
 %% ===================================================================
-init(Parent, NodeType, BrowseNodes, ResultFun) ->
+init(Parent, NodeType, RegisterFun, BrowseNodes, ResultFun) ->
     register(?MODULE, self()),
     Debug = sys:debug_options([]),
     proc_lib:init_ack(Parent, {ok, self()}),
     State1 = #state{backoff = ?INITIAL_BACKOFF,
                     node_type = NodeType,
                     result_fun = ResultFun,
+                    register_fun = RegisterFun,
                     browse_nodes = BrowseNodes,
                     browse_ref = dict:new()},
     State2 = maybe_register_service(State1),
@@ -88,8 +100,9 @@ browse_nodes([Node|Rest], #state{browse_ref=BrowseRef}=State) ->
 
 maybe_register_service(#state{backoff=Backoff,
                               node_type=NodeType,
-                              browse_nodes=BrowseNodes}=State) ->
-    case register_service(NodeType) of
+                              browse_nodes=BrowseNodes,
+                              register_fun=RegisterFun}=State) ->
+    case register_service(NodeType, RegisterFun) of
         {ok, Ref} ->
             State1 = State#state{register_ref=Ref, backoff=?INITIAL_BACKOFF},
             browse_nodes(BrowseNodes, State1);
@@ -105,7 +118,7 @@ maybe_register_service(#state{backoff=Backoff,
     end.
 
             
-register_service(Node) ->
+register_service(Node, RegisterFun) ->
     {ok, Hostname} = inet:gethostname(),
     ServiceName = service_name(Node),
     case dnssd:register(node_name(Node, Hostname), ServiceName, ?PORT) of
@@ -115,6 +128,7 @@ register_service(Node) ->
                     RegisteredAtom = binary_to_atom(RegisteredName, utf8),
                     net_kernel:stop(),
                     {ok, _} = net_kernel:start([RegisteredAtom, longnames]),
+                    RegisterFun(RegisteredAtom),
                     {ok, Ref}
             after ?TIMEOUT ->
                     {error, timeout}
